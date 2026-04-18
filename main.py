@@ -75,6 +75,61 @@ def suggest_command(product_id: int, supplier_id: Optional[int] = None):
         logger.error(f"Suggestion failed: {e}")
         sys.exit(1)
 
+def inspect_source_command():
+    """Inspect the database schema and source data."""
+    print("\n=== Database Tables ===\n")
+    tables = db.get_all_tables()
+    for table in tables:
+        print(f"  - {table}")
+    
+    print("\n=== Source Data Schema ===\n")
+    try:
+        source_mapping = db.infer_raw_material_source_columns()
+        print(f"Detection Method: {source_mapping['method']}")
+        print(f"Source Table: {source_mapping['source_table']}")
+        print(f"Product ID Column: {source_mapping['product_id_col']}")
+        print(f"Product Name Column: {source_mapping['product_name_col']}")
+        print(f"Product Type Column: {source_mapping['product_type_col']} (filter: {source_mapping['product_type_filter']})")
+        print(f"Supplier ID Column: {source_mapping['supplier_id_col']}")
+        print(f"Supplier Name Column: {source_mapping['supplier_name_col']}")
+    except Exception as e:
+        logger.warning(f"Could not infer source mapping: {e}")
+    
+    print("\n=== Product_FinishedGood Schema (if exists) ===\n")
+    if db.table_exists("Product_FinishedGood"):
+        columns = db.get_table_columns("Product_FinishedGood")
+        print(f"Columns: {', '.join(columns)}")
+    else:
+        print("Table Product_FinishedGood does not exist")
+    
+    print("\n=== Sample Rows from Source ===\n")
+    try:
+        source_mapping = db.infer_raw_material_source_columns()
+        if source_mapping["method"] == "standard_join":
+            # For standard join, show sample from Product table
+            if db.table_exists(source_mapping["source_table"]):
+                samples = db.fetch_sample_rows(source_mapping["source_table"], limit=3)
+                for i, sample in enumerate(samples, 1):
+                    print(f"Row {i}:")
+                    for k, v in sample.items():
+                        print(f"  {k}: {v}")
+                    print()
+    except Exception as e:
+        logger.warning(f"Could not fetch sample rows: {e}")
+    
+    print("\n=== Raw Material Data Count ===\n")
+    try:
+        from enrich_raw_materials import discover_raw_material_sources
+        raw_materials = discover_raw_material_sources()
+        print(f"Total raw materials to enrich: {len(raw_materials)}")
+        if raw_materials:
+            print(f"\nFirst 3 examples:")
+            for i, mat in enumerate(raw_materials[:3], 1):
+                print(f"{i}. Product: {mat['product_name']} (ID: {mat['product_id']}) "
+                      f"from {mat['supplier_name']} (Supplier ID: {mat['supplier_id']})")
+    except Exception as e:
+        logger.warning(f"Could not discover raw materials: {e}")
+
 def main():
     """Main CLI interface."""
     parser = argparse.ArgumentParser(description="Raw Material Substitution System")
@@ -85,6 +140,9 @@ def main():
 
     # Enrich command
     subparsers.add_parser("enrich", help="Run enrichment pipeline")
+
+    # Inspect source command
+    subparsers.add_parser("inspect-source", help="Inspect database schema and source data")
 
     # Compare command
     compare_parser = subparsers.add_parser("compare", help="Compare two products")
@@ -109,6 +167,8 @@ def main():
             setup_database()
         elif args.command == "enrich":
             run_enrichment()
+        elif args.command == "inspect-source":
+            inspect_source_command()
         elif args.command == "compare":
             compare_command(args.product_a, args.supplier_a, args.product_b, args.supplier_b)
         elif args.command == "suggest":

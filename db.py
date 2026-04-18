@@ -191,5 +191,71 @@ class Database:
             for row in rows
         ]
 
+    def get_all_tables(self) -> List[str]:
+        """Get list of all tables in the database."""
+        query = "SELECT name FROM sqlite_master WHERE type='table'"
+        rows = self.execute_query(query)
+        return [row[0] for row in rows]
+
+    def table_exists(self, table_name: str) -> bool:
+        """Check if a table exists in the database."""
+        query = "SELECT name FROM sqlite_master WHERE type='table' AND name = ?"
+        rows = self.execute_query(query, (table_name,))
+        return len(rows) > 0
+
+    def get_table_columns(self, table_name: str) -> List[str]:
+        """Get column names for a table using PRAGMA."""
+        if not self.table_exists(table_name):
+            raise ValueError(f"Table {table_name} does not exist")
+        query = f"PRAGMA table_info({table_name})"
+        rows = self.execute_query(query)
+        return [row[1] for row in rows]
+
+    def fetch_sample_rows(self, table_name: str, limit: int = 5) -> List[Dict[str, Any]]:
+        """Fetch sample rows from a table with column names."""
+        if not self.table_exists(table_name):
+            raise ValueError(f"Table {table_name} does not exist")
+        
+        columns = self.get_table_columns(table_name)
+        query = f"SELECT {', '.join(columns)} FROM {table_name} LIMIT {limit}"
+        rows = self.execute_query(query)
+        
+        return [
+            {col: row[i] for i, col in enumerate(columns)}
+            for row in rows
+        ]
+
+    def infer_raw_material_source_columns(self) -> Dict[str, Optional[str]]:
+        """Infer column mapping for raw materials from available tables.
+        
+        Returns a dict with keys:
+            - product_id_col: column name for product ID
+            - product_name_col: column name for product name
+            - supplier_id_col: column name for supplier ID
+            - supplier_name_col: column name for supplier name
+        """
+        # Try standard approach first: Product + Supplier + Supplier_Product
+        if (self.table_exists("Product") and 
+            self.table_exists("Supplier") and 
+            self.table_exists("Supplier_Product")):
+            return {
+                "source_table": "Product",
+                "join_table": "Supplier_Product",
+                "supplier_table": "Supplier",
+                "product_id_col": "Id",
+                "product_name_col": "SKU",
+                "product_type_col": "Type",
+                "product_type_filter": "raw-material",
+                "supplier_id_col": "Id",
+                "supplier_name_col": "Name",
+                "method": "standard_join"
+            }
+        
+        # Fallback: could add other detection strategies here
+        raise ValueError(
+            "Cannot find expected source tables. "
+            "Expected Product, Supplier, Supplier_Product tables to exist."
+        )
+
 # Global database instance
 db = Database()

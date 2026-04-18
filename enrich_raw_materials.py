@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-Script to enrich raw materials with structured data from Qwen API.
+Script to enrich raw materials with structured data from Ollama API.
 """
 
 import logging
 import sys
-from typing import Dict, Any
+from typing import Dict, Any, List
 import pickle
 from db import db
 from config import config
@@ -17,13 +17,60 @@ from embeddings import embedding_service
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+def discover_raw_material_sources() -> List[Dict[str, Any]]:
+    """Discover and fetch raw materials from the database using schema introspection."""
+    logger.info("Discovering raw material sources...")
+    
+    # Get the inferred column mapping
+    mapping = db.infer_raw_material_source_columns()
+    logger.info(f"Using mapping: {mapping}")
+    
+    # Build dynamic query based on discovered schema
+    if mapping["method"] == "standard_join":
+        query = f"""
+        SELECT
+            p.{mapping['product_id_col']} as product_id,
+            p.{mapping['product_name_col']} as product_name,
+            s.{mapping['supplier_id_col']} as supplier_id,
+            s.{mapping['supplier_name_col']} as supplier_name
+        FROM {mapping['source_table']} p
+        JOIN {mapping['join_table']} sp ON p.{mapping['product_id_col']} = sp.ProductId
+        JOIN {mapping['supplier_table']} s ON sp.SupplierId = s.{mapping['supplier_id_col']}
+        WHERE p.{mapping['product_type_col']} = ?
+        """
+        rows = db.execute_query(query, (mapping['product_type_filter'],))
+        logger.info(f"Query used: {query}")
+    else:
+        raise ValueError(f"Unsupported method: {mapping['method']}")
+    
+    raw_materials = [
+        {
+            "product_id": row[0],
+            "product_name": row[1],
+            "supplier_id": row[2],
+            "supplier_name": row[3]
+        }
+        for row in rows
+    ]
+    
+    logger.info(f"Discovered {len(raw_materials)} raw material-supplier combinations")
+    logger.info(f"Source columns used: product_id={mapping['product_id_col']}, "
+                f"product_name={mapping['product_name_col']}, "
+                f"supplier_id={mapping['supplier_id_col']}, "
+                f"supplier_name={mapping['supplier_name_col']}")
+    
+    return raw_materials
+
 def enrich_raw_materials():
-    """Enrich all raw materials with Qwen API data."""
+    """Enrich all raw materials with Ollama API data."""
     logger.info("Starting raw material enrichment process")
 
-    # Get all raw materials with suppliers
-    raw_materials = db.get_raw_materials_with_suppliers()
-    logger.info(f"Found {len(raw_materials)} raw material-supplier combinations")
+    try:
+        # Discover raw materials using schema introspection
+        raw_materials = discover_raw_material_sources()
+    except Exception as e:
+        logger.error(f"Failed to discover raw material sources: {e}")
+        raise
 
     enriched_count = 0
     error_count = 0
@@ -35,7 +82,7 @@ def enrich_raw_materials():
             # Clean product name
             cleaned_name = clean_product_name(material['product_name'])
 
-            # Prepare supplier data (could be expanded)
+            # Prepare supplier data
             supplier_data_text = f"Supplier: {material['supplier_name']}"
 
             # Call Ollama API
