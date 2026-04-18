@@ -1,4 +1,5 @@
 import logging
+import json
 from typing import Dict, Any, Optional
 from db import db
 from comparison_scores import (
@@ -13,6 +14,34 @@ from comparison_scores import (
 
 logger = logging.getLogger(__name__)
 
+def check_organic_status(product_json: str) -> Dict[str, Any]:
+    """
+    Check if a product is organic based on cleaned name and metadata.
+    
+    Args:
+        product_json: JSON string with product data
+        
+    Returns:
+        {"is_organic": bool, "warning": str or None}
+    """
+    try:
+        data = json.loads(product_json)
+        cleaned_name = data.get("cleaned_canonical_name", "").lower()
+        
+        # Keywords that indicate organic
+        organic_keywords = ["organic", "certified organic", "bio", "biodynamic", "natural"]
+        
+        is_organic = any(keyword in cleaned_name for keyword in organic_keywords)
+        
+        if not is_organic:
+            warning = f"⚠️  WARNING: The material '{data.get('cleaned_canonical_name', 'Unknown')}' may not be organic"
+            return {"is_organic": False, "warning": warning}
+        else:
+            return {"is_organic": True, "warning": None}
+    except Exception as e:
+        logger.error(f"Error checking organic status: {e}")
+        return {"is_organic": False, "warning": None}
+
 def compare_products(product_id_a: int, supplier_id_a: int,
                     product_id_b: int, supplier_id_b: int) -> Dict[str, Any]:
     """
@@ -25,7 +54,7 @@ def compare_products(product_id_a: int, supplier_id_a: int,
         supplier_id_b: Supplier ID for material B
 
     Returns:
-        Dictionary with comparison results
+        Dictionary with comparison results including organic status warnings
     """
     # Get product data
     product_a = db.get_raw_material_master(product_id_a, supplier_id_a)
@@ -36,6 +65,10 @@ def compare_products(product_id_a: int, supplier_id_a: int,
 
     product_a_json = product_a["product_json"]
     product_b_json = product_b["product_json"]
+
+    # Check organic status for both products
+    organic_status_a = check_organic_status(product_a_json)
+    organic_status_b = check_organic_status(product_b_json)
 
     # Calculate sub-scores
     taste_score = calculate_taste_score(product_a_json, product_b_json)
@@ -54,6 +87,13 @@ def compare_products(product_id_a: int, supplier_id_a: int,
         general_score, taste_score, feasibility_score, usage_score, confidence_score
     )
 
+    # Build warnings list
+    warnings = []
+    if organic_status_a["warning"]:
+        warnings.append(f"Product A: {organic_status_a['warning']}")
+    if organic_status_b["warning"]:
+        warnings.append(f"Product B: {organic_status_b['warning']}")
+
     # Prepare result
     result = {
         "product_id_a": product_id_a,
@@ -64,7 +104,10 @@ def compare_products(product_id_a: int, supplier_id_a: int,
         "confidence_score": confidence_score,
         "general_comparison_score": general_score,
         "comparison_label": comparison_label,
-        "comparison_reason": comparison_reason
+        "comparison_reason": comparison_reason,
+        "product_a_organic": organic_status_a["is_organic"],
+        "product_b_organic": organic_status_b["is_organic"],
+        "warnings": warnings if warnings else None
     }
 
     # Store in database

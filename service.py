@@ -1,7 +1,8 @@
 import logging
+import json
 from typing import Dict, Any, List
 from db import db
-from comparison_engine import compare_products
+from comparison_engine import compare_products, check_organic_status
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +70,9 @@ def suggest_alternatives(product_id: int, supplier_id: int = None) -> Dict[str, 
     # Sort by general score descending
     alternatives.sort(key=lambda x: x["comparison"]["general_comparison_score"], reverse=True)
 
+    # Check organic status for source product
+    source_organic_status = check_organic_status(source_product["product_json"])
+
     return {
         "source_product": {
             "product_id": product_id,
@@ -76,5 +80,6 @@ def suggest_alternatives(product_id: int, supplier_id: int = None) -> Dict[str, 
             "product_name": source_product["product_name"],
             "product_class": source_class
         },
+        "source_product_organic": source_organic_status["is_organic"],
         "alternatives": alternatives
     }

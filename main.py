@@ -37,8 +37,8 @@ def compare_command(product_id_a: int, supplier_id_a: int,
     try:
         result = compare_products(product_id_a, supplier_id_a, product_id_b, supplier_id_b)
         print("Comparison Result:")
-        print(f"Product A: {result['product_id_a']}")
-        print(f"Product B: {result['product_id_b']}")
+        print(f"Product A: {result['product_id_a']} (Organic: {'✓ Yes' if result['product_a_organic'] else '✗ No'})")
+        print(f"Product B: {result['product_id_b']} (Organic: {'✓ Yes' if result['product_b_organic'] else '✗ No'})")
         print(f"General Score: {result['general_comparison_score']:.3f}")
         print(f"Label: {result['comparison_label']}")
         print(f"Reason: {result['comparison_reason']}")
@@ -47,6 +47,12 @@ def compare_command(product_id_a: int, supplier_id_a: int,
         print(f"Feasibility: {result['feasibility_score']:.3f}")
         print(f"Usage: {result['usage_score']:.3f}")
         print(f"Confidence: {result['confidence_score']:.3f}")
+        
+        # Display warnings if any
+        if result['warnings']:
+            print("\n⚠️  WARNINGS:")
+            for warning in result['warnings']:
+                print(f"  {warning}")
     except Exception as e:
         logger.error(f"Comparison failed: {e}")
         sys.exit(1)
@@ -56,8 +62,11 @@ def suggest_command(product_id: int, supplier_id: Optional[int] = None):
     from service import suggest_alternatives
     try:
         result = suggest_alternatives(product_id, supplier_id)
-        print(f"Alternatives for {result['source_product']['product_name']} "
-              f"(class: {result['source_product']['product_class']}):")
+        source_product = result['source_product']
+        source_organic = result.get('source_product_organic', False)
+        
+        print(f"Alternatives for {source_product['product_name']} "
+              f"(class: {source_product['product_class']}, Organic: {'✓ Yes' if source_organic else '✗ No'}):")
         print()
 
         if not result["alternatives"]:
@@ -66,9 +75,15 @@ def suggest_command(product_id: int, supplier_id: Optional[int] = None):
 
         for i, alt in enumerate(result["alternatives"], 1):
             comp = alt["comparison"]
-            print(f"{i}. {alt['product_name']}")
+            alt_organic = comp.get('product_b_organic', False)
+            print(f"{i}. {alt['product_name']} (Organic: {'✓ Yes' if alt_organic else '✗ No'})")
             print(f"   Score: {comp['general_comparison_score']:.3f} ({comp['comparison_label']})")
             print(f"   Reason: {comp['comparison_reason']}")
+            
+            # Show warnings if any
+            if comp.get('warnings'):
+                for warning in comp['warnings']:
+                    print(f"   {warning}")
             print()
 
     except Exception as e:
