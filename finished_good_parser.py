@@ -4,24 +4,30 @@ import os
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
-
-#Parser function for solving the format TYPE-C_ID-Name-..-DB_ID
 def parse_sku(sku: str):
     parts = sku.split("-")
-    if parts[0] == "RM":
-        return {
-            "type": parts[0],
-            "customer_id": parts[1],
-            "material_name": " ".join(parts[2:-1]).lower(),
-            "unique_id": parts[-1]
-        }
+    if parts[0] == "FG":
+        if parts[1] == "iherb" and len(parts) == 3:
+            return{
+                "type": parts[0],
+                "market": parts[1],
+                "market-additional": "",
+                "market-search": parts[2]            
+            }
+        if parts[1] == "iherb" and parts[2] == "cen" and len(parts) == 4:
+            return{
+                "type": parts[0],
+                "market": parts[1],
+                "market-additional": parts[2],
+                "market-search": parts[3]            
+                }
 
 def main():
     #Select only products starting with RM -> only raw materials are collected
     data = []
     with sqlite3.connect(os.path.join(SCRIPT_DIR, "db.sqlite")) as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT SKU FROM Product WHERE SKU LIKE 'RM-%';")
+        cursor.execute("SELECT SKU FROM Product WHERE SKU LIKE 'FG-%';")
         rows = cursor.fetchall()
 
     #Process basic labeling for every raw material to start with analysis
@@ -35,10 +41,11 @@ def main():
             print(f"Error parsing: {sku} -> {e}")
 
     #Save the file as json to use it later in the pipeline
-    with open(os.path.join(SCRIPT_DIR, "parsed_raw_material.json"), "w", encoding="utf-8") as f:
+    with open(os.path.join(SCRIPT_DIR, "parsed_finished_good.json"), "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
 
     print(f"Exported {len(data)} records to output.json")
 
 if __name__ == "__main__":
-    main()
+    main()        
+
