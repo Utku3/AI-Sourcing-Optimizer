@@ -205,3 +205,4 @@ ORDER BY p.Id, rm_p.Id, s.Name;
 | `raw_material_parser.py` | `Product` → `Product_RawMaterial` tablosunu doldurur |
 | `finished_good_parser.py` | `Product` → `Product_FinishedGood` tablosunu doldurur |
 | `bom_query.py` | Her FG için RM listesini JSON olarak üretir. `--with-suppliers` flag'i ile supplier'lar da dahil edilir |
+| `material_query.py` | Her RM için supplier ve kullanıldığı FG listesini JSON olarak üretir. |
