@@ -30,28 +30,62 @@ class Database:
             return cursor.rowcount
 
     def get_raw_materials_with_suppliers(self) -> List[Dict[str, Any]]:
-        """Get raw materials with their suppliers from existing tables."""
-        query = """
-        SELECT
-            p.Id as product_id,
-            p.SKU as product_name,
-            s.Id as supplier_id,
-            s.Name as supplier_name
-        FROM Product p
-        JOIN Supplier_Product sp ON p.Id = sp.ProductId
-        JOIN Supplier s ON sp.SupplierId = s.Id
-        WHERE p.Type = 'raw-material'
+        """Get raw materials with their suppliers from existing tables.
+        Supports both standard schema and Product_FinishedGood schema.
         """
-        rows = self.execute_query(query)
-        return [
-            {
-                "product_id": row[0],
-                "product_name": row[1],
-                "supplier_id": row[2],
-                "supplier_name": row[3]
-            }
-            for row in rows
-        ]
+        # First try to use enriched data if available
+        enriched = self.execute_query(
+            "SELECT product_id, supplier_id, product_name FROM raw_material_master LIMIT 1"
+        )
+        if enriched:
+            # Use enriched data from raw_material_master
+            query = """
+            SELECT DISTINCT product_id, supplier_id, product_name
+            FROM raw_material_master
+            """
+            rows = self.execute_query(query)
+            return [
+                {
+                    "product_id": row[0],
+                    "product_name": row[2],
+                    "supplier_id": row[1],
+                    "supplier_name": "enriched"
+                }
+                for row in rows
+            ]
+        
+        # Fall back to base tables if enriched data doesn't exist
+        try:
+            # Try standard schema first
+            if (self.table_exists("Product") and 
+                self.table_exists("Supplier") and 
+                self.table_exists("Supplier_Product")):
+                query = """
+                SELECT
+                    p.Id as product_id,
+                    p.SKU as product_name,
+                    s.Id as supplier_id,
+                    s.Name as supplier_name
+                FROM Product p
+                JOIN Supplier_Product sp ON p.Id = sp.ProductId
+                JOIN Supplier s ON sp.SupplierId = s.Id
+                WHERE p.Type = 'raw-material'
+                """
+                rows = self.execute_query(query)
+                return [
+                    {
+                        "product_id": row[0],
+                        "product_name": row[1],
+                        "supplier_id": row[2],
+                        "supplier_name": row[3]
+                    }
+                    for row in rows
+                ]
+        except Exception:
+            pass
+        
+        # If we get here, tables don't exist
+        return []
 
     def insert_raw_material_master(self, data: Dict[str, Any]) -> None:
         """Insert or update raw material master data."""
@@ -262,6 +296,10 @@ class Database:
                 "product_id_col": "ProductId",
                 "product_name_col": "MarketSearch",  # or Market
                 "supplier_col": "Market",  # Use Market as supplier identifier
+                "product_type_col": None,  # N/A for Product_FinishedGood
+                "product_type_filter": None,  # N/A for Product_FinishedGood
+                "supplier_id_col": None,  # Generated from supplier_col
+                "supplier_name_col": "Market",
                 "available_columns": columns,
                 "method": "product_finished_good"
             }

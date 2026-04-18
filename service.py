@@ -18,12 +18,18 @@ def suggest_alternatives(product_id: int, supplier_id: int = None) -> Dict[str, 
     """
     # Get source product data
     if supplier_id is None:
-        # Find any supplier for this product
-        source_data = db.get_raw_materials_with_suppliers()
-        source_candidates = [s for s in source_data if s["product_id"] == product_id]
-        if not source_candidates:
-            raise ValueError(f"No data found for product {product_id}")
-        supplier_id = source_candidates[0]["supplier_id"]
+        # First check enriched data in raw_material_master
+        query = "SELECT DISTINCT supplier_id FROM raw_material_master WHERE product_id = ? LIMIT 1"
+        rows = db.execute_query(query, (product_id,))
+        if rows:
+            supplier_id = rows[0][0]
+        else:
+            # Fall back to base tables
+            source_data = db.get_raw_materials_with_suppliers()
+            source_candidates = [s for s in source_data if s["product_id"] == product_id]
+            if not source_candidates:
+                raise ValueError(f"No data found for product {product_id}")
+            supplier_id = source_candidates[0]["supplier_id"]
 
     source_product = db.get_raw_material_master(product_id, supplier_id)
     if not source_product:

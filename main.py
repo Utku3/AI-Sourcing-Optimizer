@@ -89,9 +89,10 @@ def inspect_source_command():
         print(f"Source Table: {source_mapping['source_table']}")
         print(f"Product ID Column: {source_mapping['product_id_col']}")
         print(f"Product Name Column: {source_mapping['product_name_col']}")
-        print(f"Product Type Column: {source_mapping['product_type_col']} (filter: {source_mapping['product_type_filter']})")
-        print(f"Supplier ID Column: {source_mapping['supplier_id_col']}")
-        print(f"Supplier Name Column: {source_mapping['supplier_name_col']}")
+        if source_mapping['method'] == 'standard_join':
+            print(f"Product Type Column: {source_mapping['product_type_col']} (filter: {source_mapping['product_type_filter']})")
+            print(f"Supplier ID Column: {source_mapping['supplier_id_col']}")
+        print(f"Supplier Name Column: {source_mapping.get('supplier_name_col', 'N/A')}")
     except Exception as e:
         logger.warning(f"Could not infer source mapping: {e}")
     
