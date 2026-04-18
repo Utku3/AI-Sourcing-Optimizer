@@ -10,7 +10,7 @@ import pickle
 from db import db
 from config import config
 from name_cleaning import clean_product_name
-from qwen_client import qwen_client
+from ollama_client import ollama_client
 from embedding_text_builder import build_embedding_text
 from embeddings import embedding_service
 
@@ -38,8 +38,8 @@ def enrich_raw_materials():
             # Prepare supplier data (could be expanded)
             supplier_data_text = f"Supplier: {material['supplier_name']}"
 
-            # Call Qwen API
-            structured_data = qwen_client.get_product_structured_data(
+            # Call Ollama API
+            structured_data = ollama_client.get_product_structured_data(
                 original_product_name=material['product_name'],
                 cleaned_product_name=cleaned_name,
                 supplier_name=material['supplier_name'],
@@ -48,7 +48,7 @@ def enrich_raw_materials():
             )
 
             # Prepare data for storage
-            supplier_summary = qwen_client.get_supplier_summary_json(
+            supplier_summary = ollama_client.get_supplier_summary_json(
                 supplier_name=material["supplier_name"],
                 supplier_data_text=supplier_data_text
             )

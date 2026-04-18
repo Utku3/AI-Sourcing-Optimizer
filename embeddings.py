@@ -71,7 +71,13 @@ class EmbeddingService:
     """Service for generating embeddings with configurable backend."""
 
     def __init__(self):
-        self.backend = self._create_backend()
+        self.backend = None
+
+    def _get_backend(self) -> EmbeddingBackend:
+        """Get or create the backend."""
+        if self.backend is None:
+            self.backend = self._create_backend()
+        return self.backend
 
     def _create_backend(self) -> EmbeddingBackend:
         """Create the appropriate backend based on configuration."""
@@ -95,7 +101,7 @@ class EmbeddingService:
             List of float values representing the embedding
         """
         try:
-            return self.backend.generate_embedding(text)
+            return self._get_backend().generate_embedding(text)
         except Exception as e:
             logger.error(f"Failed to generate embedding for text: {text[:100]}...: {e}")
             # Return zero vector as fallback
@@ -103,7 +109,7 @@ class EmbeddingService:
 
     def get_model_name(self) -> str:
         """Get the current model name."""
-        return self.backend.get_model_name()
+        return self._get_backend().get_model_name()
 
 # Global embedding service instance
 embedding_service = EmbeddingService()

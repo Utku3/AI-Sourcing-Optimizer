@@ -4,7 +4,7 @@
 CREATE TABLE IF NOT EXISTS raw_material_master (
     product_id INTEGER NOT NULL,
     product_name TEXT NOT NULL,
-    product_json TEXT,  -- JSON string from Qwen API
+    product_json TEXT,  -- JSON string from Ollama API
     product_class TEXT,  -- general_class from JSON
     supplier_id INTEGER NOT NULL,
     supplier_name TEXT NOT NULL,

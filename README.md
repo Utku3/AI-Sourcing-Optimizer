@@ -1,10 +1,10 @@
 # Raw Material Substitution Decision-Support System
 
-A modular Python system for raw-material substitution in supply-chain AI assistants. This system analyzes raw materials, generates structured data using AI, computes similarity scores, and provides substitution recommendations.
+A modular Python system for raw-material substitution in supply-chain AI assistants. This system analyzes raw materials, generates structured data using Ollama with qwen2.5:72b, computes similarity scores, and provides substitution recommendations.
 
 ## Features
 
-- **Data Enrichment**: Clean product names and enrich with structured data from Qwen API
+- **Data Enrichment**: Clean product names and enrich with structured data from Ollama qwen2.5:72b
 - **Embedding Generation**: Create text embeddings for semantic similarity analysis
 - **Comparison Engine**: Calculate compatibility scores between raw materials
 - **Substitution Suggestions**: Find and rank alternative materials
@@ -17,7 +17,7 @@ A modular Python system for raw-material substitution in supply-chain AI assista
 ├── db.py                      # Database utilities
 ├── config.py                  # Configuration management
 ├── name_cleaning.py           # Product name cleaning functions
-├── qwen_client.py             # Qwen API client
+├── ollama_client.py           # Ollama API client
 ├── enrich_raw_materials.py    # Enrichment pipeline script
 ├── embedding_text_builder.py  # Embedding text generation
 ├── embeddings.py              # Embedding service with multiple backends
@@ -35,15 +35,10 @@ A modular Python system for raw-material substitution in supply-chain AI assista
 pip install -r requirements.txt
 ```
 
-2. Set environment variables:
+2. Ensure Ollama is running locally with qwen2.5:72b model:
 ```bash
-export QWEN_API_KEY="your-qwen-api-key"
-export QWEN_BASE_URL="https://api.qwen.ai/v1"  # Optional
-export QWEN_MODEL="qwen-turbo"                # Optional
-
-# For OpenAI embeddings (optional)
-export OPENAI_API_KEY="your-openai-api-key"
-export EMBEDDING_BACKEND="openai"             # Default: sentence-transformers
+ollama serve
+ollama pull qwen2.5:72b
 ```
 
 3. Initialize database:
@@ -55,7 +50,7 @@ python main.py setup
 
 ### Enrich Raw Materials
 
-Run the enrichment pipeline to process raw materials with Qwen API:
+Run the enrichment pipeline to process raw materials with Ollama:
 
 ```bash
 python main.py enrich
@@ -90,15 +85,20 @@ Stores comparison results between product pairs.
 
 ## API Functions
 
-### compare_products(product_id_a, product_id_b)
+### compare_products(product_id_a, supplier_id_a, product_id_b, supplier_id_b)
 Returns structured comparison data including scores and recommendations.
 
-### suggest_alternatives(product_id)
+### suggest_alternatives(product_id, supplier_id=None)
 Returns ranked list of alternative materials with compatibility scores.
 
 ## Configuration
 
-The system supports multiple embedding backends:
+The system uses Ollama locally:
+- **Base URL**: http://localhost:11434
+- **Model**: qwen2.5:72b
+- **Timeout**: 120 seconds
+
+Embedding backends:
 - **sentence-transformers**: Local, free, good performance (default)
 - **OpenAI**: Cloud-based, requires API key, high quality
 
@@ -107,7 +107,7 @@ Configure via environment variables or modify `config.py`.
 ## Dependencies
 
 - requests: HTTP client for API calls
-- sentence-transformers: Local embedding generation
+- sentence-transformers: Local embedding generation (optional)
 - openai: OpenAI API client (optional)
 - sqlite3: Database (built-in)
 
