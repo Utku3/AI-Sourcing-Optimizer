@@ -1,5 +1,6 @@
 import sqlite3
 import os
+import threading
 from typing import List, Tuple, Dict, Any, Optional
 import json
 import pickle
@@ -9,10 +10,16 @@ class Database:
 
     def __init__(self, db_path: str = "db.sqlite"):
         self.db_path = db_path
+        self._local = threading.local()
 
     def get_connection(self) -> sqlite3.Connection:
-        """Get a database connection."""
-        return sqlite3.connect(self.db_path)
+        """Get a per-thread reused connection with WAL mode enabled."""
+        conn = getattr(self._local, 'conn', None)
+        if conn is None:
+            conn = sqlite3.connect(self.db_path)
+            conn.execute("PRAGMA journal_mode=WAL")
+            self._local.conn = conn
+        return conn
 
     def execute_query(self, query: str, params: Tuple = ()) -> List[Tuple]:
         """Execute a SELECT query and return results."""

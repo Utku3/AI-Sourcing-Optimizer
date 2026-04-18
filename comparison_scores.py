@@ -18,21 +18,22 @@ def calculate_taste_score(product_a_json: Dict[str, Any], product_b_json: Dict[s
     if not taste_a or not taste_b:
         return 0.5  # Neutral score when taste info is missing
 
-    # Simple compatibility matrix
-    compatible_pairs = [
-        ("sweet", "sweet"),
-        ("sour", "sour"),
-        ("neutral", "neutral"),
-        ("neutral", "sweet"),
-        ("neutral", "sour"),
-        ("sweet", "neutral"),
-        ("sour", "neutral")
+    # Groups of mutually compatible tastes
+    compatible_groups = [
+        {"sweet", "neutral"},
+        {"sour", "acidic", "tart", "neutral"},
+        {"salty", "savory", "umami", "neutral"},
+        {"bitter", "neutral"},
+        {"spicy", "pungent", "neutral"},
+        {"astringent", "neutral"},
     ]
-
-    if (taste_a, taste_b) in compatible_pairs or (taste_b, taste_a) in compatible_pairs:
+    # Exact same taste is always compatible
+    if taste_a == taste_b:
         return 0.9
-    else:
-        return 0.3
+    for group in compatible_groups:
+        if taste_a in group and taste_b in group:
+            return 0.9
+    return 0.3
 
 def calculate_usage_score(product_a_json: Dict[str, Any], product_b_json: Dict[str, Any]) -> float:
     """

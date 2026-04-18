@@ -25,7 +25,7 @@ def check_organic_status(product_json: str) -> Dict[str, Any]:
         {"is_organic": bool, "warning": str or None}
     """
     try:
-        data = json.loads(product_json)
+        data = product_json if isinstance(product_json, dict) else json.loads(product_json)
         cleaned_name = data.get("cleaned_canonical_name", "").lower()
         
         # Keywords that indicate organic
@@ -56,6 +56,11 @@ def compare_products(product_id_a: int, supplier_id_a: int,
     Returns:
         Dictionary with comparison results including organic status warnings
     """
+    # Return cached result if available
+    cached = db.get_comparison(product_id_a, supplier_id_a, product_id_b, supplier_id_b)
+    if cached:
+        return cached
+
     # Get product data
     product_a = db.get_raw_material_master(product_id_a, supplier_id_a)
     product_b = db.get_raw_material_master(product_id_b, supplier_id_b)
