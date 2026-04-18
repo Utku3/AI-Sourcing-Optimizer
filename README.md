@@ -4,17 +4,31 @@ A modular Python system for raw-material substitution in supply-chain AI assista
 
 ## Features
 
+- **Automatic Schema Detection**: Works with multiple database schemas (standard or Product_FinishedGood)
 - **Data Enrichment**: Clean product names and enrich with structured data from Ollama qwen2.5:72b
 - **Embedding Generation**: Create text embeddings for semantic similarity analysis
 - **Comparison Engine**: Calculate compatibility scores between raw materials
 - **Substitution Suggestions**: Find and rank alternative materials
 - **Modular Architecture**: Clean separation of concerns with configurable backends
 
+## Supported Database Schemas
+
+The system automatically detects and adapts to different database schemas:
+
+### Schema 1: Standard (Product + Supplier + Supplier_Product)
+- `Product` table with `Id`, `SKU`, `Type` columns
+- `Supplier` table with `Id`, `Name` columns
+- `Supplier_Product` junction table
+
+### Schema 2: Product_FinishedGood (Remote Server)
+- `Product_FinishedGood` table with `ProductId`, `Market`, `MarketSearch`, `MarketAdditional` columns
+- No separate Supplier table (Market field used as supplier identifier)
+
 ## Project Structure
 
 ```
 ├── schema.sql                 # Database schema
-├── db.py                      # Database utilities
+├── db.py                      # Database utilities with schema introspection
 ├── config.py                  # Configuration management
 ├── name_cleaning.py           # Product name cleaning functions
 ├── ollama_client.py           # Ollama API client
@@ -25,6 +39,7 @@ A modular Python system for raw-material substitution in supply-chain AI assista
 ├── comparison_engine.py       # Product comparison logic
 ├── service.py                 # High-level service functions
 ├── main.py                    # CLI entry point
+├── test_schema.py             # Schema detection test utility
 └── requirements.txt           # Python dependencies
 ```
 
@@ -41,12 +56,29 @@ ollama serve
 ollama pull qwen2.5:72b
 ```
 
-3. Initialize database:
+3. Initialize database (creates tables if needed):
 ```bash
 python main.py setup
 ```
 
+4. Verify schema detection (optional but recommended):
+```bash
+python test_schema.py
+```
+
 ## Usage
+
+### Test Schema Detection
+
+Before running enrichment, verify the database schema is detected correctly:
+
+```bash
+# Comprehensive schema test
+python test_schema.py
+
+# Or inspect with detailed output
+python main.py inspect-source
+```
 
 ### Enrich Raw Materials
 

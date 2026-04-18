@@ -18,14 +18,20 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 def discover_raw_material_sources() -> List[Dict[str, Any]]:
-    """Discover and fetch raw materials from the database using schema introspection."""
+    """Discover and fetch raw materials from the database using schema introspection.
+    
+    Supports multiple source schemas:
+    1. Standard: Product + Supplier + Supplier_Product tables
+    2. Product_FinishedGood only (remote server)
+    """
     logger.info("Discovering raw material sources...")
     
     # Get the inferred column mapping
     mapping = db.infer_raw_material_source_columns()
-    logger.info(f"Using mapping: {mapping}")
+    logger.info(f"Detection method: {mapping['method']}")
+    logger.info(f"Using source table: {mapping['source_table']}")
     
-    # Build dynamic query based on discovered schema
+    # Build query based on detected method
     if mapping["method"] == "standard_join":
         query = f"""
         SELECT
@@ -39,26 +45,56 @@ def discover_raw_material_sources() -> List[Dict[str, Any]]:
         WHERE p.{mapping['product_type_col']} = ?
         """
         rows = db.execute_query(query, (mapping['product_type_filter'],))
-        logger.info(f"Query used: {query}")
+        logger.info(f"Using standard join method")
+        logger.info(f"Source columns: product_id={mapping['product_id_col']}, "
+                    f"product_name={mapping['product_name_col']}, "
+                    f"supplier_id={mapping['supplier_id_col']}, "
+                    f"supplier_name={mapping['supplier_name_col']}")
+        
+        raw_materials = [
+            {
+                "product_id": row[0],
+                "product_name": row[1],
+                "supplier_id": row[2],
+                "supplier_name": row[3]
+            }
+            for row in rows
+        ]
+    
+    elif mapping["method"] == "product_finished_good":
+        # For Product_FinishedGood, we need to generate supplier_id and supplier_name from available data
+        query = f"""
+        SELECT
+            {mapping['product_id_col']},
+            {mapping['product_name_col']},
+            {mapping['supplier_col']}
+        FROM {mapping['source_table']}
+        """
+        rows = db.execute_query(query)
+        logger.info(f"Using Product_FinishedGood method")
+        logger.info(f"Source columns: product_id={mapping['product_id_col']}, "
+                    f"product_name={mapping['product_name_col']}, "
+                    f"supplier_col={mapping['supplier_col']}")
+        
+        raw_materials = []
+        for i, row in enumerate(rows):
+            product_id = row[0]
+            product_name = row[1]
+            supplier_name = row[2] if row[2] else "unknown"
+            # Use hash of supplier name as supplier_id for uniqueness
+            supplier_id = abs(hash(supplier_name)) % (10 ** 8)
+            
+            raw_materials.append({
+                "product_id": product_id,
+                "product_name": product_name,
+                "supplier_id": supplier_id,
+                "supplier_name": supplier_name
+            })
+    
     else:
         raise ValueError(f"Unsupported method: {mapping['method']}")
     
-    raw_materials = [
-        {
-            "product_id": row[0],
-            "product_name": row[1],
-            "supplier_id": row[2],
-            "supplier_name": row[3]
-        }
-        for row in rows
-    ]
-    
     logger.info(f"Discovered {len(raw_materials)} raw material-supplier combinations")
-    logger.info(f"Source columns used: product_id={mapping['product_id_col']}, "
-                f"product_name={mapping['product_name_col']}, "
-                f"supplier_id={mapping['supplier_id_col']}, "
-                f"supplier_name={mapping['supplier_name_col']}")
-    
     return raw_materials
 
 def enrich_raw_materials():

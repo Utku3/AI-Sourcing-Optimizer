@@ -228,13 +228,16 @@ class Database:
     def infer_raw_material_source_columns(self) -> Dict[str, Optional[str]]:
         """Infer column mapping for raw materials from available tables.
         
+        Tries multiple strategies:
+        1. Standard join: Product + Supplier + Supplier_Product
+        2. Product_FinishedGood only (for remote server deployments)
+        
         Returns a dict with keys:
-            - product_id_col: column name for product ID
-            - product_name_col: column name for product name
-            - supplier_id_col: column name for supplier ID
-            - supplier_name_col: column name for supplier name
+            - method: detection strategy used
+            - source_table: primary source table name
+            - ... other method-specific keys
         """
-        # Try standard approach first: Product + Supplier + Supplier_Product
+        # Strategy 1: Try standard approach: Product + Supplier + Supplier_Product
         if (self.table_exists("Product") and 
             self.table_exists("Supplier") and 
             self.table_exists("Supplier_Product")):
@@ -251,10 +254,22 @@ class Database:
                 "method": "standard_join"
             }
         
-        # Fallback: could add other detection strategies here
+        # Strategy 2: Product_FinishedGood only (remote server schema)
+        if self.table_exists("Product_FinishedGood"):
+            columns = self.get_table_columns("Product_FinishedGood")
+            return {
+                "source_table": "Product_FinishedGood",
+                "product_id_col": "ProductId",
+                "product_name_col": "MarketSearch",  # or Market
+                "supplier_col": "Market",  # Use Market as supplier identifier
+                "available_columns": columns,
+                "method": "product_finished_good"
+            }
+        
         raise ValueError(
             "Cannot find expected source tables. "
-            "Expected Product, Supplier, Supplier_Product tables to exist."
+            "Expected either (Product, Supplier, Supplier_Product) or Product_FinishedGood to exist. "
+            f"Available tables: {self.get_all_tables()}"
         )
 
 # Global database instance
