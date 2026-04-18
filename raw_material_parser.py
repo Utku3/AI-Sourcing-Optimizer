@@ -1,44 +1,53 @@
 import sqlite3
-import json
 import os
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
-#Parser function for solving the format TYPE-C_ID-Name-..-DB_ID
 def parse_sku(sku: str):
     parts = sku.split("-")
     if parts[0] == "RM":
         return {
-            "type": parts[0],
-            "customer_id": parts[1],
+            "company_id": int(parts[1][1:]),  # C1 -> 1
             "material_name": " ".join(parts[2:-1]).lower(),
             "unique_id": parts[-1]
         }
 
+
 def main():
-    #Select only products starting with RM -> only raw materials are collected
-    data = []
     with sqlite3.connect(os.path.join(SCRIPT_DIR, "db.sqlite")) as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT SKU FROM Product WHERE SKU LIKE 'RM-%';")
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS Product_RawMaterial (
+                ProductId    INTEGER PRIMARY KEY,
+                CompanyId    INTEGER NOT NULL,
+                MaterialName TEXT NOT NULL,
+                UniqueId     TEXT NOT NULL,
+                FOREIGN KEY (ProductId) REFERENCES Product(Id),
+                FOREIGN KEY (CompanyId) REFERENCES Company(Id)
+            );
+        """)
+
+        cursor.execute("SELECT Id, SKU FROM Product WHERE SKU LIKE 'RM-%';")
         rows = cursor.fetchall()
 
-    #Process basic labeling for every raw material to start with analysis
-    for row in rows:
-        sku = row[0]
-        try:
-            parsed = parse_sku(sku)
-            parsed["raw_sku"] = sku
-            data.append(parsed)
-        except Exception as e:
-            print(f"Error parsing: {sku} -> {e}")
+        inserted = 0
+        for product_id, sku in rows:
+            try:
+                parsed = parse_sku(sku)
+                cursor.execute(
+                    "INSERT OR REPLACE INTO Product_RawMaterial (ProductId, CompanyId, MaterialName, UniqueId) VALUES (?, ?, ?, ?);",
+                    (product_id, parsed["company_id"], parsed["material_name"], parsed["unique_id"])
+                )
+                inserted += 1
+            except Exception as e:
+                print(f"Error parsing: {sku} -> {e}")
 
-    #Save the file as json to use it later in the pipeline
-    with open(os.path.join(SCRIPT_DIR, "parsed_raw_material.json"), "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
+        conn.commit()
 
-    print(f"Exported {len(data)} records to output.json")
+    print(f"Inserted {inserted} records into Product_RawMaterial")
+
 
 if __name__ == "__main__":
     main()
