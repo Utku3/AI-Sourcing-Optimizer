@@ -112,16 +112,31 @@ def fetch_materials() -> List[Dict[str, Any]]:
             used_in_by_material.setdefault(row["rm_id"], []).append({
                 "product_id": row["fg_id"], "company_id": row["fg_company_id"], "market": row["market"]
             })
-    materials_list = []
+    # Distinct by MaterialName — aggregate FG usage across all product_ids with the same name
+    grouped: Dict[str, Dict[str, Any]] = {}
     for row in materials_rows:
         rm_id = row["product_id"]
-        material_name = row["MaterialName"]
-        used_in_products = used_in_by_material.get(rm_id, [])
-        materials_list.append({
-            "material_name": material_name, "normalized_name": normalize_text(material_name),
-            "tokens": tokenize_material_name(material_name), "product_id": rm_id,
-            "used_in_products": used_in_products
-        })
+        name = row["MaterialName"]
+        if name not in grouped:
+            grouped[name] = {
+                "material_name": name,
+                "normalized_name": normalize_text(name),
+                "tokens": tokenize_material_name(name),
+                "product_id": rm_id,
+                "_seen_fgs": set(),
+                "used_in_products": []
+            }
+        entry = grouped[name]
+        for fg in used_in_by_material.get(rm_id, []):
+            if fg["product_id"] not in entry["_seen_fgs"]:
+                entry["_seen_fgs"].add(fg["product_id"])
+                entry["used_in_products"].append(fg)
+
+    materials_list = []
+    for entry in grouped.values():
+        del entry["_seen_fgs"]
+        materials_list.append(entry)
+
     return materials_list
 
 def build_material_index(materials: List[Dict[str, Any]]) -> Dict[int, Dict[str, Any]]:
