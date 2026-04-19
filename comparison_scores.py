@@ -37,45 +37,36 @@ def calculate_taste_score(product_a_json: Dict[str, Any], product_b_json: Dict[s
 
 def calculate_usage_score(product_a_json: Dict[str, Any], product_b_json: Dict[str, Any]) -> float:
     """
-    Calculate usage compatibility score based on functional role and application domain.
-
-    Args:
-        product_a_json: JSON data for product A
-        product_b_json: JSON data for product B
-
-    Returns:
-        Float between 0.0 and 1.0
+    application_domain (55%) + functional_role (45%).
+    Both weighted more heavily than before; mismatches penalise harder.
     """
-    role_a = product_a_json.get("functional_role", "").lower()
-    role_b = product_b_json.get("functional_role", "").lower()
+    role_a   = product_a_json.get("functional_role", "").lower()
+    role_b   = product_b_json.get("functional_role", "").lower()
     domain_a = product_a_json.get("application_domain", "").lower()
     domain_b = product_b_json.get("application_domain", "").lower()
 
-    role_score = 1.0 if role_a == role_b else 0.5
-    domain_score = 1.0 if domain_a == domain_b else 0.7
+    role_score   = 1.0 if role_a   == role_b   else 0.35
+    domain_score = 1.0 if domain_a == domain_b else 0.45
 
-    return (role_score + domain_score) / 2.0
+    return 0.55 * domain_score + 0.45 * role_score
 
 def calculate_feasibility_score(product_a_json: Dict[str, Any], product_b_json: Dict[str, Any]) -> float:
     """
-    Calculate feasibility score based on physical form and ingredient type compatibility.
-
-    Args:
-        product_a_json: JSON data for product A
-        product_b_json: JSON data for product B
-
-    Returns:
-        Float between 0.0 and 1.0
+    category/general_class (40%) + physical_form (35%) + ingredient_type (25%).
+    Category mismatch is a hard zero — different categories are not substitutes.
     """
+    cat_a  = product_a_json.get("general_class", "").lower()
+    cat_b  = product_b_json.get("general_class", "").lower()
     form_a = product_a_json.get("physical_form", "").lower()
     form_b = product_b_json.get("physical_form", "").lower()
     type_a = product_a_json.get("ingredient_type", "").lower()
     type_b = product_b_json.get("ingredient_type", "").lower()
 
-    form_score = 1.0 if form_a == form_b else 0.8
-    type_score = 1.0 if type_a == type_b else 0.6
+    cat_score  = 1.0 if (cat_a and cat_b and cat_a == cat_b) else (0.5 if not cat_a or not cat_b else 0.0)
+    form_score = 1.0 if form_a == form_b else 0.65
+    type_score = 1.0 if type_a == type_b else 0.50
 
-    return (form_score + type_score) / 2.0
+    return 0.40 * cat_score + 0.35 * form_score + 0.25 * type_score
 
 def same_canonical_name(product_a_json: Dict[str, Any], product_b_json: Dict[str, Any]) -> bool:
     """True when both products share the same cleaned canonical name (case-insensitive)."""
@@ -83,14 +74,35 @@ def same_canonical_name(product_a_json: Dict[str, Any], product_b_json: Dict[str
     name_b = product_b_json.get("cleaned_canonical_name", "").strip().lower()
     return bool(name_a and name_b and name_a == name_b)
 
+def name_similarity(product_a_json: Dict[str, Any], product_b_json: Dict[str, Any]) -> float:
+    """
+    Gradient name similarity using word-token Jaccard on cleaned canonical names.
+    Same name → 1.0, shared words → proportional boost, no overlap → 0.0.
+    Ignores common filler words that carry no identity signal.
+    """
+    _STOP = {"and", "or", "of", "the", "with", "for", "from", "in", "a", "an"}
+    name_a = product_a_json.get("cleaned_canonical_name", "").lower().strip()
+    name_b = product_b_json.get("cleaned_canonical_name", "").lower().strip()
+    if not name_a or not name_b:
+        return 0.0
+    if name_a == name_b:
+        return 1.0
+    tokens_a = set(name_a.split()) - _STOP
+    tokens_b = set(name_b.split()) - _STOP
+    if not tokens_a or not tokens_b:
+        return 0.0
+    intersection = tokens_a & tokens_b
+    union = tokens_a | tokens_b
+    return len(intersection) / len(union)
+
+
 def calculate_confidence_score(product_a_json: Dict[str, Any], product_b_json: Dict[str, Any]) -> float:
     """
-    Canonical-name similarity. Same name → 1.0 (direct substitute signal).
-    Different name → 0.5 (neutral — no penalty for unrelated names).
+    Name similarity score — ranges 0.0–1.0 based on shared words in canonical names.
+    Same name → 1.0 (direct substitute). Partial overlap → proportional positive boost.
+    No overlap → 0.0 (small penalty given the low 6% weight).
     """
-    if same_canonical_name(product_a_json, product_b_json):
-        return 1.0
-    return 0.25
+    return name_similarity(product_a_json, product_b_json)
 
 def calculate_general_score(taste_score: float, feasibility_score: float,
                           usage_score: float, confidence_score: float) -> float:
@@ -108,10 +120,11 @@ def calculate_general_score(taste_score: float, feasibility_score: float,
     Returns:
         Float between 0.0 and 1.0
     """
-    return (0.30 * usage_score +
-            0.30 * feasibility_score +
-            0.20 * taste_score +
-            0.20 * confidence_score)
+    # feasibility (incl. category): 44%, usage (domain+role): 42%, taste: 8%, canonical name: 6%
+    return (0.44 * feasibility_score +
+            0.42 * usage_score       +
+            0.08 * taste_score       +
+            0.06 * confidence_score)
 
 def get_comparison_label(general_score: float) -> str:
     """
