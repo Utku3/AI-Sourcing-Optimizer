@@ -1,2 +1,7 @@
 .venv
 *json
+__pycache__/
+*.pyc
+*.pyo
+db.sqlite-shm
+db.sqlite-wal

@@ -908,7 +908,7 @@ function renderAlternatives(d) {
         <div>
           <div class="alt-name">${escHtml(a.product_name)}</div>
           <div class="alt-supplier" style="margin-top:4px;display:flex;gap:6px;align-items:center">
-            Supplier ID ${a.supplier_id}
+            ${escHtml(a.supplier_name || 'Supplier ID ' + a.supplier_id)}
           </div>
         </div>
         <div class="score-big">
@@ -1074,7 +1074,7 @@ function scoreBarRows(c) {
 def index():
     companies_rows = db.execute_query("SELECT Id, Name FROM Company ORDER BY Name")
     products_rows  = db.execute_query(
-        "SELECT DISTINCT product_id, product_name FROM raw_material_master ORDER BY product_name"
+        "SELECT MIN(product_id), product_name FROM raw_material_master GROUP BY product_name ORDER BY product_name"
     )
     return render_template_string(
         HTML_TEMPLATE,

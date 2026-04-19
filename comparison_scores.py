@@ -77,22 +77,20 @@ def calculate_feasibility_score(product_a_json: Dict[str, Any], product_b_json: 
 
     return (form_score + type_score) / 2.0
 
+def same_canonical_name(product_a_json: Dict[str, Any], product_b_json: Dict[str, Any]) -> bool:
+    """True when both products share the same cleaned canonical name (case-insensitive)."""
+    name_a = product_a_json.get("cleaned_canonical_name", "").strip().lower()
+    name_b = product_b_json.get("cleaned_canonical_name", "").strip().lower()
+    return bool(name_a and name_b and name_a == name_b)
+
 def calculate_confidence_score(product_a_json: Dict[str, Any], product_b_json: Dict[str, Any]) -> float:
     """
-    Calculate confidence score based on the confidence values from Qwen API.
-
-    Args:
-        product_a_json: JSON data for product A
-        product_b_json: JSON data for product B
-
-    Returns:
-        Float between 0.0 and 1.0
+    Canonical-name similarity. Same name → 1.0 (direct substitute signal).
+    Different name → 0.5 (neutral — no penalty for unrelated names).
     """
-    conf_a = product_a_json.get("confidence", 0.5)
-    conf_b = product_b_json.get("confidence", 0.5)
-
-    # Average of both confidences
-    return (conf_a + conf_b) / 2.0
+    if same_canonical_name(product_a_json, product_b_json):
+        return 1.0
+    return 0.25
 
 def calculate_general_score(taste_score: float, feasibility_score: float,
                           usage_score: float, confidence_score: float) -> float:

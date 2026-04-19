@@ -217,7 +217,7 @@ class Database:
     def get_products_by_class(self, product_class: str) -> List[Dict[str, Any]]:
         """Get all products in a specific class."""
         query = """
-        SELECT product_id, supplier_id, product_name, product_json
+        SELECT product_id, supplier_id, product_name, product_json, supplier_name
         FROM raw_material_master
         WHERE product_class = ?
         """
@@ -227,7 +227,8 @@ class Database:
                 "product_id": row[0],
                 "supplier_id": row[1],
                 "product_name": row[2],
-                "product_json": json.loads(row[3]) if row[3] else {}
+                "product_json": json.loads(row[3]) if row[3] else {},
+                "supplier_name": row[4] or "",
             }
             for row in rows
         ]

@@ -38,11 +38,18 @@ def suggest_alternatives(product_id: int, supplier_id: int = None) -> Dict[str, 
 
     source_class = source_product["product_class"]
 
-    # Get all products in the same class
+    # Get all products in the same class, deduplicated by (product_id, supplier_id)
     candidates = db.get_products_by_class(source_class)
-
-    # Remove the source product itself
-    candidates = [c for c in candidates if not (c["product_id"] == product_id and c["supplier_id"] == supplier_id)]
+    seen_pairs = set()
+    deduped = []
+    for c in candidates:
+        if c["product_id"] == product_id and c["supplier_id"] == supplier_id:
+            continue
+        key = (c["product_name"].strip().lower(), c["supplier_id"])
+        if key not in seen_pairs:
+            seen_pairs.add(key)
+            deduped.append(c)
+    candidates = deduped
 
     alternatives = []
 
@@ -59,6 +66,7 @@ def suggest_alternatives(product_id: int, supplier_id: int = None) -> Dict[str, 
                 alternatives.append({
                     "product_id": candidate["product_id"],
                     "supplier_id": candidate["supplier_id"],
+                    "supplier_name": candidate.get("supplier_name", ""),
                     "product_name": candidate["product_name"],
                     "comparison": comparison
                 })

@@ -71,6 +71,27 @@ def compare_products(product_id_a: int, supplier_id_a: int,
     product_a_json = product_a["product_json"]
     product_b_json = product_b["product_json"]
 
+    # Same canonical name → direct substitute, skip scoring
+    from comparison_scores import same_canonical_name
+    if same_canonical_name(product_a_json, product_b_json):
+        result = {
+            "product_id_a": product_id_a, "supplier_id_a": supplier_id_a,
+            "product_id_b": product_id_b, "supplier_id_b": supplier_id_b,
+            "taste_score": 1.0, "feasibility_score": 1.0,
+            "usage_score": 1.0, "confidence_score": 1.0,
+            "general_comparison_score": 1.0,
+            "comparison_label": "strong substitute",
+            "comparison_reason": "Identical canonical name — same material from different supplier.",
+            "product_a_organic": check_organic_status(product_a_json)["is_organic"],
+            "product_b_organic": check_organic_status(product_b_json)["is_organic"],
+            "warnings": None,
+        }
+        try:
+            db.insert_comparison(result)
+        except Exception as e:
+            logger.error(f"Failed to store same-name comparison: {e}")
+        return result
+
     # Check organic status for both products
     organic_status_a = check_organic_status(product_a_json)
     organic_status_b = check_organic_status(product_b_json)
