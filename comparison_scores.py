@@ -68,11 +68,86 @@ def calculate_feasibility_score(product_a_json: Dict[str, Any], product_b_json: 
 
     return 0.40 * cat_score + 0.35 * form_score + 0.25 * type_score
 
+def analyze_name_differences(product_a_json: Dict[str, Any],
+                             product_b_json: Dict[str, Any]) -> list:
+    """
+    Compare canonical names and return small human-readable notes about meaningful differences.
+    E.g. one is organic and the other is not, or different protein/sugar sources.
+    Returns empty list when names are identical or no meaningful difference is detected.
+    """
+    name_a = product_a_json.get("cleaned_canonical_name", "").lower().strip()
+    name_b = product_b_json.get("cleaned_canonical_name", "").lower().strip()
+    label_a = product_a_json.get("cleaned_canonical_name", "Product A")
+    label_b = product_b_json.get("cleaned_canonical_name", "Product B")
+
+    if not name_a or not name_b or name_a == name_b:
+        return []
+
+    tokens_a = set(name_a.split())
+    tokens_b = set(name_b.split())
+    only_a = tokens_a - tokens_b
+    only_b = tokens_b - tokens_a
+
+    notes = []
+
+    # Protein source
+    protein_sources = {"whey", "casein", "rice", "pea", "soy", "soya",
+                       "hemp", "egg", "beef", "plant", "collagen", "gelatin"}
+    src_a = only_a & protein_sources
+    src_b = only_b & protein_sources
+    if src_a and src_b:
+        notes.append(f"Different protein sources: {', '.join(sorted(src_a))} vs {', '.join(sorted(src_b))}.")
+
+    # Sugar / sweetener type
+    sugars = {"brown", "white", "raw", "cane", "beet", "coconut", "maple",
+              "fructose", "glucose", "sucrose", "dextrose", "maltose"}
+    sug_a = only_a & sugars
+    sug_b = only_b & sugars
+    if sug_a and sug_b:
+        notes.append(f"Different sugar types: {', '.join(sorted(sug_a))} vs {', '.join(sorted(sug_b))}.")
+
+    # Processing level
+    processing = {"hydrolyzed", "concentrate", "concentrated", "isolate",
+                  "extract", "whole", "refined", "raw", "pure", "unrefined",
+                  "instant", "micronized", "cold-pressed"}
+    proc_a = only_a & processing
+    proc_b = only_b & processing
+    if proc_a and proc_b:
+        notes.append(f"Different processing: {', '.join(sorted(proc_a))} vs {', '.join(sorted(proc_b))}.")
+    elif proc_a:
+        notes.append(f"'{label_a}' is {', '.join(sorted(proc_a))} — '{label_b}' is not.")
+    elif proc_b:
+        notes.append(f"'{label_b}' is {', '.join(sorted(proc_b))} — '{label_a}' is not.")
+
+    # Grade
+    grades = {"pharmaceutical", "food", "industrial", "cosmetic", "technical", "feed"}
+    grade_a = only_a & grades
+    grade_b = only_b & grades
+    if grade_a and grade_b:
+        notes.append(f"Different grades: {', '.join(sorted(grade_a))} vs {', '.join(sorted(grade_b))}.")
+
+    # Catch-all: if names share a base word but diverge significantly, note the differing words
+    shared = tokens_a & tokens_b - {"and", "or", "of", "the", "with", "for", "from", "in", "a", "an"}
+    if shared and only_a and only_b and not notes:
+        notes.append(f"Similar but not identical: '{label_a}' vs '{label_b}'.")
+
+    return notes
+
+
 def same_canonical_name(product_a_json: Dict[str, Any], product_b_json: Dict[str, Any]) -> bool:
-    """True when both products share the same cleaned canonical name (case-insensitive)."""
+    """
+    True when both products refer to the same material.
+    Uses token-set equality so word-order variants like 'Acacia Gum' and 'Gum Acacia'
+    are correctly treated as identical.
+    """
     name_a = product_a_json.get("cleaned_canonical_name", "").strip().lower()
     name_b = product_b_json.get("cleaned_canonical_name", "").strip().lower()
-    return bool(name_a and name_b and name_a == name_b)
+    if not name_a or not name_b:
+        return False
+    if name_a == name_b:
+        return True
+    # Same tokens regardless of order
+    return set(name_a.split()) == set(name_b.split())
 
 def name_similarity(product_a_json: Dict[str, Any], product_b_json: Dict[str, Any]) -> float:
     """
@@ -120,11 +195,11 @@ def calculate_general_score(taste_score: float, feasibility_score: float,
     Returns:
         Float between 0.0 and 1.0
     """
-    # feasibility (incl. category): 44%, usage (domain+role): 42%, taste: 8%, canonical name: 6%
-    return (0.44 * feasibility_score +
-            0.42 * usage_score       +
-            0.08 * taste_score       +
-            0.06 * confidence_score)
+    # feasibility (incl. category): 38%, usage (domain+role): 36%, name similarity: 20%, taste: 6%
+    return (0.38 * feasibility_score +
+            0.36 * usage_score       +
+            0.20 * confidence_score  +
+            0.06 * taste_score)
 
 def get_comparison_label(general_score: float) -> str:
     """

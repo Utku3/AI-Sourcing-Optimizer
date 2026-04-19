@@ -406,6 +406,8 @@ nav button:hover:not(.active) { color: var(--t2); }
 .score-row.overall .bar-track { height: 6px; }
 
 .reason-text { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); color: var(--t3); font-size: 12px; line-height: 1.6; }
+.name-notes { margin-top: 8px; display: flex; flex-direction: column; gap: 4px; }
+.name-notes span { font-size: 11px; color: #c8922a; background: rgba(200,146,42,0.1); border-radius: 4px; padding: 3px 8px; }
 
 /* ── No match state ── */
 .no-match {
@@ -918,6 +920,7 @@ function renderAlternatives(d) {
       </div>
       ${scoreBarRows(c)}
       ${c.comparison_reason ? `<div class="reason-text">${escHtml(c.comparison_reason)}</div>` : ''}
+      ${(c.warnings||[]).length ? `<div class="name-notes">${c.warnings.map(w=>`<span>⚠ ${escHtml(w)}</span>`).join('')}</div>` : ''}
       <button class="detail-btn" onclick="toggleDetail(this, ${src.product_id}, ${a.product_id})">+ View Details</button>
       <div class="detail-panel"></div>
     </div>`;
@@ -968,6 +971,7 @@ function renderComparison(d, nameA, nameB) {
       <div class="compare-scores">
         ${scoreBarRows(d)}
         ${d.comparison_reason ? `<div class="reason-text">${escHtml(d.comparison_reason)}</div>` : ''}
+        ${(d.warnings||[]).length ? `<div class="name-notes">${d.warnings.map(w=>`<span>⚠ ${escHtml(w)}</span>`).join('')}</div>` : ''}
         <button class="detail-btn" onclick="toggleDetail(this, ${sel[1].id}, ${sel[2].id})">+ View Details</button>
         <div class="detail-panel"></div>
       </div>

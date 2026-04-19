@@ -72,7 +72,7 @@ def compare_products(product_id_a: int, supplier_id_a: int,
     product_b_json = product_b["product_json"]
 
     # Same canonical name → direct substitute, skip scoring
-    from comparison_scores import same_canonical_name
+    from comparison_scores import same_canonical_name, analyze_name_differences
     if same_canonical_name(product_a_json, product_b_json):
         result = {
             "product_id_a": product_id_a, "supplier_id_a": supplier_id_a,
@@ -113,12 +113,15 @@ def compare_products(product_id_a: int, supplier_id_a: int,
         general_score, taste_score, feasibility_score, usage_score, confidence_score
     )
 
-    # Build warnings list
+    # Build warnings list — only flag organic mismatch when one product is organic and the other isn't
     warnings = []
-    if organic_status_a["warning"]:
-        warnings.append(f"Product A: {organic_status_a['warning']}")
-    if organic_status_b["warning"]:
-        warnings.append(f"Product B: {organic_status_b['warning']}")
+    if organic_status_a["is_organic"] and not organic_status_b["is_organic"]:
+        name_b = product_b_json.get("cleaned_canonical_name", "Product B")
+        warnings.append(f"⚠ '{name_b}' may not be organic while the source product is.")
+    elif organic_status_b["is_organic"] and not organic_status_a["is_organic"]:
+        name_a = product_a_json.get("cleaned_canonical_name", "Product A")
+        warnings.append(f"⚠ '{name_a}' may not be organic while the alternative is.")
+    warnings.extend(analyze_name_differences(product_a_json, product_b_json))
 
     # Prepare result
     result = {
