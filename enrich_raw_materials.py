@@ -139,13 +139,16 @@ def watch_for_new_products(interval_seconds: int = 60):
     logger.info(f"Product watcher started (checking every {interval_seconds}s)")
     while True:
         try:
-            new_materials = find_unenriched_materials()
-            if new_materials:
-                logger.info(f"Watcher found {len(new_materials)} new product(s) — enriching")
-                for material in new_materials:
-                    enrich_single_material(material)
+            if not ollama_client.test_connection():
+                logger.debug("Watcher: Ollama unreachable, skipping")
             else:
-                logger.debug("Watcher: no new products found")
+                new_materials = find_unenriched_materials()
+                if new_materials:
+                    logger.info(f"Watcher found {len(new_materials)} new product(s) — enriching")
+                    for material in new_materials:
+                        enrich_single_material(material)
+                else:
+                    logger.debug("Watcher: no new products found")
         except Exception as e:
             logger.error(f"Watcher error: {e}")
         time.sleep(interval_seconds)
