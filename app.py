@@ -10,6 +10,180 @@ from enrich_raw_materials import start_watcher
 app = Flask(__name__)
 start_watcher(interval_seconds=60)
 
+
+def compute_supplier_portfolio(mat_map: dict) -> dict:
+    """
+    Greedy set-cover: find the fewest suppliers that can cover all company materials,
+    using same-product multi-supplier options and >=95% compatible substitutes.
+    """
+    pid_list = list(mat_map.keys())
+    if not pid_list:
+        return None
+
+    ph = ",".join("?" * len(pid_list))
+
+    # All (product_id, supplier_id, supplier_name) rows for these materials
+    direct_rows = db.execute_query(
+        f"SELECT product_id, supplier_id, supplier_name FROM raw_material_master WHERE product_id IN ({ph})",
+        tuple(pid_list)
+    )
+    # Name lookup for any product we'll encounter as a substitute
+    all_product_names = {r[0]: mat_map[r[0]]["product_name"] for r in direct_rows if r[0] in mat_map}
+
+    # All cached comparisons involving these materials — collect for diagnostics, filter >=0.95 for substitutes
+    all_comp_rows = db.execute_query(
+        f"""SELECT product_id_a, supplier_id_a, product_id_b, supplier_id_b, general_comparison_score
+            FROM raw_material_comparisons
+            WHERE product_id_a IN ({ph}) OR product_id_b IN ({ph})""",
+        tuple(pid_list) * 2
+    )
+    comp_rows = [r for r in all_comp_rows if r[4] >= 0.95]
+    max_score = max((r[4] for r in all_comp_rows), default=0.0)
+    total_comps = len(all_comp_rows)
+
+    # Collect substitute product ids we need names for
+    sub_pids = set()
+    for pid_a, sid_a, pid_b, sid_b, _ in comp_rows:
+        if pid_a in mat_map and pid_b not in mat_map:
+            sub_pids.add((pid_b, sid_b))
+        if pid_b in mat_map and pid_a not in mat_map:
+            sub_pids.add((pid_a, sid_a))
+
+    # Bulk fetch substitute names + supplier names
+    sub_lookup = {}  # (pid, sid) -> (product_name, supplier_name)
+    if sub_pids:
+        for pid, sid in sub_pids:
+            rows = db.execute_query(
+                "SELECT product_name, supplier_name FROM raw_material_master WHERE product_id=? AND supplier_id=? LIMIT 1",
+                (pid, sid)
+            )
+            if rows:
+                sub_lookup[(pid, sid)] = (rows[0][0], rows[0][1])
+
+    # Build material_options: pid -> list of option dicts
+    material_options = {pid: [] for pid in pid_list}
+
+    # Direct (same product, any supplier)
+    for pid, sid, sname in direct_rows:
+        if pid in material_options:
+            material_options[pid].append({
+                "covering_pid": pid,
+                "covering_pname": mat_map[pid]["product_name"],
+                "supplier_id": sid,
+                "supplier_name": sname,
+                "is_substitute": False,
+                "score": 1.0
+            })
+
+    # Substitutes from cached comparisons
+    for pid_a, sid_a, pid_b, sid_b, score in comp_rows:
+        # pid_a is a company material -> pid_b is a substitute option
+        if pid_a in material_options and pid_b != pid_a:
+            if (pid_b, sid_b) in sub_lookup:
+                pname_b, sname_b = sub_lookup[(pid_b, sid_b)]
+            elif (pid_b, sid_b) in [(r[0], r[1]) for r in direct_rows]:
+                pname_b = mat_map.get(pid_b, {}).get("product_name", "")
+                sname_b = next((r[2] for r in direct_rows if r[0] == pid_b and r[1] == sid_b), "")
+            else:
+                continue
+            material_options[pid_a].append({
+                "covering_pid": pid_b,
+                "covering_pname": pname_b,
+                "supplier_id": sid_b,
+                "supplier_name": sname_b,
+                "is_substitute": True,
+                "score": score
+            })
+        # pid_b is a company material -> pid_a is a substitute option
+        if pid_b in material_options and pid_a != pid_b:
+            if (pid_a, sid_a) in sub_lookup:
+                pname_a, sname_a = sub_lookup[(pid_a, sid_a)]
+            elif pid_a in mat_map:
+                pname_a = mat_map[pid_a]["product_name"]
+                sname_a = next((r[2] for r in direct_rows if r[0] == pid_a and r[1] == sid_a), "")
+            else:
+                continue
+            material_options[pid_b].append({
+                "covering_pid": pid_a,
+                "covering_pname": pname_a,
+                "supplier_id": sid_a,
+                "supplier_name": sname_a,
+                "is_substitute": True,
+                "score": score
+            })
+
+    # Build supplier coverage map
+    supplier_coverage = defaultdict(list)
+    supplier_names = {}
+    for material_pid, options in material_options.items():
+        for opt in options:
+            sid = opt["supplier_id"]
+            supplier_names[sid] = opt["supplier_name"]
+            supplier_coverage[sid].append((material_pid, opt))
+
+    # Greedy set cover
+    uncovered = set(pid_list)
+    chosen = []
+    while uncovered:
+        best_sid, best_covers = None, []
+        for sid, covers in supplier_coverage.items():
+            unc = [(mpid, opt) for mpid, opt in covers if mpid in uncovered]
+            if len(unc) > len(best_covers):
+                best_covers, best_sid = unc, sid
+        if not best_sid:
+            break
+        # One option per material: prefer direct (not substitute), then highest score
+        seen, deduped = set(), []
+        for mpid, opt in sorted(best_covers, key=lambda x: (x[1]["is_substitute"], -x[1]["score"])):
+            if mpid not in seen:
+                seen.add(mpid)
+                deduped.append((mpid, opt))
+        covers_out = []
+        for mpid, opt in deduped:
+            current_sup_ids = {s["id"] for s in mat_map[mpid]["suppliers"]}
+            current_sup_names = [s["name"] for s in mat_map[mpid]["suppliers"]]
+            if opt["is_substitute"]:
+                action = "substitute"
+            elif best_sid in current_sup_ids:
+                action = "keep"
+            else:
+                action = "switch_supplier"
+            covers_out.append({
+                "material_product_id": mpid,
+                "material_product_name": mat_map[mpid]["product_name"],
+                "via_product_name": opt["covering_pname"],
+                "is_substitute": opt["is_substitute"],
+                "score": round(opt["score"], 3),
+                "current_suppliers": current_sup_names,
+                "action": action
+            })
+        chosen.append({
+            "supplier_id": best_sid,
+            "supplier_name": supplier_names[best_sid],
+            "covers": covers_out
+        })
+        for mpid, _ in best_covers:
+            uncovered.discard(mpid)
+
+    current_suppliers = set()
+    for mdata in mat_map.values():
+        for s in mdata["suppliers"]:
+            current_suppliers.add(s["id"])
+
+    return {
+        "current_supplier_count": len(current_suppliers),
+        "optimal_supplier_count": len(chosen),
+        "reduction": len(current_suppliers) - len(chosen),
+        "chosen_suppliers": chosen,
+        "uncovered_count": len(uncovered),
+        "uncovered_materials": [mat_map[pid]["product_name"] for pid in uncovered if pid in mat_map],
+        "diagnostics": {
+            "total_comparisons_cached": total_comps,
+            "substitutes_found": len(comp_rows),
+            "max_similarity_score": round(max_score, 3),
+        }
+    }
+
 HTML_TEMPLATE = """<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -280,6 +454,78 @@ nav button:hover:not(.active) { color: var(--t2); }
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--s3); border-radius: 3px; }
+
+/* ── Portfolio optimization ── */
+.portfolio-card {
+  background: var(--s1); border: 1px solid var(--border2);
+  border-left: 3px solid var(--green); border-radius: 10px;
+  margin-bottom: 10px; overflow: hidden;
+}
+.portfolio-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 16px 20px; border-bottom: 1px solid var(--border);
+}
+.portfolio-title { font-size: 13px; font-weight: 600; color: var(--t1); }
+.portfolio-subtitle { font-size: 12px; color: var(--t3); margin-top: 2px; }
+.portfolio-savings { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 700; }
+.portfolio-savings .from { color: var(--red); text-decoration: line-through; opacity: 0.8; }
+.portfolio-savings .arr { color: var(--t3); font-weight: 400; }
+.portfolio-savings .to { color: var(--green); }
+.portfolio-suppliers { padding: 12px 20px; display: flex; flex-direction: column; gap: 10px; }
+.pf-supplier-block {
+  background: var(--s2); border: 1px solid var(--border); border-radius: 8px; overflow: hidden;
+}
+.pf-supplier-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 14px; border-bottom: 1px solid var(--border);
+}
+.pf-supplier-name { font-weight: 600; font-size: 13px; color: var(--t1); }
+.pf-supplier-count { font-size: 11px; color: var(--t3); }
+.pf-mat-table { width: 100%; border-collapse: collapse; }
+.pf-mat-table td { padding: 9px 14px; border-bottom: 1px solid var(--border); font-size: 12px; vertical-align: middle; }
+.pf-mat-table tr:last-child td { border-bottom: none; }
+.pf-mat-table .col-mat { width: 35%; }
+.pf-mat-table .col-cur { width: 35%; color: var(--t3); }
+.pf-mat-table .col-action { width: 30%; text-align: right; }
+.pf-mat-name { font-weight: 500; color: var(--t1); }
+.pf-replaces { font-size: 11px; color: var(--t3); margin-top: 2px; }
+.pf-score { font-size: 10px; color: var(--amber); margin-left: 4px; }
+.pf-cur-label { font-size: 10px; color: var(--t3); margin-bottom: 2px; text-transform: uppercase; letter-spacing: 0.04em; }
+.pf-cur-names { color: var(--t2); }
+.action-pill {
+  display: inline-block; padding: 2px 8px; border-radius: 4px;
+  font-size: 11px; font-weight: 600;
+}
+.action-pill.keep    { background: var(--green-bg); color: var(--green); }
+.action-pill.switch  { background: var(--amber-bg); color: var(--amber); }
+.action-pill.subst   { background: var(--blue-bg);  color: var(--blue);  }
+.portfolio-uncovered { padding: 0 20px 14px; color: var(--red); font-size: 12px; }
+
+/* ── Detail panel ── */
+.detail-btn {
+  display: inline-flex; align-items: center; gap: 5px;
+  margin-top: 14px; padding: 6px 14px; background: var(--s2);
+  border: 1px solid var(--border2); border-radius: 6px;
+  font-family: inherit; font-size: 12px; font-weight: 500;
+  color: var(--t2); cursor: pointer; transition: all 0.15s;
+}
+.detail-btn:hover { background: var(--s3); color: var(--t1); }
+.detail-panel { margin-top: 14px; border-top: 1px solid var(--border); padding-top: 14px; display: none; }
+.detail-panel.open { display: block; }
+.detail-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.detail-table th {
+  text-align: left; padding: 7px 10px;
+  background: var(--s2); color: var(--t3);
+  font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;
+}
+.detail-table th:last-child { width: 56px; text-align: center; }
+.detail-table td { padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+.detail-table tr:last-child td { border-bottom: none; }
+.detail-table .attr-col { color: var(--t3); font-weight: 500; width: 130px; white-space: nowrap; }
+.detail-table .match-col { text-align: center; }
+.detail-table .match { color: var(--green); }
+.detail-table .mismatch { color: var(--amber); }
+.detail-loading { color: var(--t3); font-size: 12px; padding: 6px 0; }
 </style>
 </head>
 <body>
@@ -442,9 +688,74 @@ function renderCompanyDetail(d) {
     </div>
     <div class="stats-row">
       <div class="stat-card"><div class="val">${mats.length}</div><div class="lbl">Raw Materials</div></div>
-      <div class="stat-card"><div class="val">${supplierSet.size}</div><div class="lbl">Unique Suppliers</div></div>
-      <div class="stat-card highlight"><div class="val">${ops.length}</div><div class="lbl">Consolidation Opportunities</div></div>
+      <div class="stat-card"><div class="val">${supplierSet.size}</div><div class="lbl">Current Suppliers</div></div>
+      ${d.supplier_portfolio && d.supplier_portfolio.reduction > 0
+        ? `<div class="stat-card highlight"><div class="val" style="color:var(--green)">${d.supplier_portfolio.optimal_supplier_count}</div><div class="lbl">Optimal Suppliers (save ${d.supplier_portfolio.reduction})</div></div>`
+        : `<div class="stat-card highlight"><div class="val">${ops.length}</div><div class="lbl">Consolidation Opportunities</div></div>`
+      }
     </div>`;
+
+  const pf = d.supplier_portfolio;
+  const pfHasActions = pf && pf.chosen_suppliers.some(s => s.covers.some(c => c.action !== 'keep'));
+  if (pf && pf.optimal_supplier_count > 0 && (pf.reduction > 0 || pfHasActions)) {
+    const savedStr = pf.reduction > 0
+      ? `<span class="from">${pf.current_supplier_count}</span><span class="arr">→</span><span class="to">${pf.optimal_supplier_count} suppliers</span>`
+      : `<span class="to">${pf.optimal_supplier_count} suppliers</span>`;
+    html += `<div class="section-title">Supplier Portfolio Optimization</div>
+    <div class="portfolio-card">
+      <div class="portfolio-header">
+        <div>
+          <div class="portfolio-title">Minimum Supplier Set</div>
+          <div class="portfolio-subtitle">Covers all materials using direct sourcing or ≥95% compatible substitutes only</div>
+        </div>
+        <div class="portfolio-savings">${savedStr}</div>
+      </div>
+      <div style="padding:8px 20px;border-bottom:1px solid var(--border);display:flex;gap:20px;font-size:11px;color:var(--t3);">
+        <span>Comparisons cached: <strong style="color:var(--t2)">${pf.diagnostics.total_comparisons_cached}</strong></span>
+        <span>≥95% substitutes found: <strong style="color:var(--t2)">${pf.diagnostics.substitutes_found}</strong></span>
+        <span>Highest similarity: <strong style="color:var(--t2)">${Math.round(pf.diagnostics.max_similarity_score * 100)}%</strong></span>
+      </div>
+      <div class="portfolio-suppliers">`;
+    pf.chosen_suppliers.forEach((sup, i) => {
+      html += `<div class="pf-supplier-block">
+        <div class="pf-supplier-header">
+          <div class="pf-supplier-name">${i + 1}. ${escHtml(sup.supplier_name)}</div>
+          <div class="pf-supplier-count">${sup.covers.length} material${sup.covers.length !== 1 ? 's' : ''}</div>
+        </div>
+        <table class="pf-mat-table"><tbody>`;
+      sup.covers.forEach(c => {
+        const curNames = c.current_suppliers.length ? c.current_suppliers.map(s => escHtml(s)).join(', ') : '—';
+        let actionPill, matCell;
+        if (c.action === 'keep') {
+          actionPill = '<span class="action-pill keep">No change</span>';
+        } else if (c.action === 'switch_supplier') {
+          actionPill = '<span class="action-pill switch">Switch supplier</span>';
+        } else {
+          actionPill = `<span class="action-pill subst">New product ≈${Math.round(c.score*100)}%</span>`;
+        }
+        if (c.is_substitute) {
+          matCell = `<div class="pf-mat-name">${escHtml(c.via_product_name)}<span class="pf-score">≈${Math.round(c.score*100)}%</span></div>
+            <div class="pf-replaces">replaces: ${escHtml(c.material_product_name)}</div>`;
+        } else {
+          matCell = `<div class="pf-mat-name">${escHtml(c.material_product_name)}</div>`;
+        }
+        html += `<tr>
+          <td class="col-mat">${matCell}</td>
+          <td class="col-cur">
+            <div class="pf-cur-label">Current supplier${c.current_suppliers.length !== 1 ? 's' : ''}</div>
+            <div class="pf-cur-names">${curNames}</div>
+          </td>
+          <td class="col-action">${actionPill}</td>
+        </tr>`;
+      });
+      html += `</tbody></table></div>`;
+    });
+    html += `</div>`;
+    if (pf.uncovered_count > 0) {
+      html += `<div class="portfolio-uncovered">⚠ ${pf.uncovered_count} material${pf.uncovered_count !== 1 ? 's' : ''} could not be covered: ${pf.uncovered_materials.map(m => escHtml(m)).join(', ')}</div>`;
+    }
+    html += `</div>`;
+  }
 
   if (ops.length) {
     html += `<div class="section-title">Consolidation Opportunities</div>
@@ -471,6 +782,8 @@ function renderCompanyDetail(d) {
           </div>
         </div>
         <div class="consolidation-footer">These materials could be sourced from a single supplier — reducing procurement complexity and potentially negotiating better volume pricing.</div>
+        <button class="detail-btn" onclick="toggleDetail(this, ${op.material_a.product_id}, ${op.material_b.product_id})">+ View Details</button>
+        <div class="detail-panel"></div>
       </div>`;
     });
     html += `</div>`;
@@ -605,6 +918,8 @@ function renderAlternatives(d) {
       </div>
       ${scoreBarRows(c)}
       ${c.comparison_reason ? `<div class="reason-text">${escHtml(c.comparison_reason)}</div>` : ''}
+      <button class="detail-btn" onclick="toggleDetail(this, ${src.product_id}, ${a.product_id})">+ View Details</button>
+      <div class="detail-panel"></div>
     </div>`;
   });
   html += `</div>`;
@@ -653,6 +968,8 @@ function renderComparison(d, nameA, nameB) {
       <div class="compare-scores">
         ${scoreBarRows(d)}
         ${d.comparison_reason ? `<div class="reason-text">${escHtml(d.comparison_reason)}</div>` : ''}
+        <button class="detail-btn" onclick="toggleDetail(this, ${sel[1].id}, ${sel[2].id})">+ View Details</button>
+        <div class="detail-panel"></div>
       </div>
       <div class="compare-overall">
         <div>
@@ -677,6 +994,50 @@ function escHtml(s) {
 function errHtml(e) {
   return `<div class="no-match"><div class="icon">⚠</div><h3>Something went wrong</h3><p>${escHtml(String(e))}</p></div>`;
 }
+// ── Detail panel toggle ───────────────────────────────
+function toggleDetail(btn, idA, idB) {
+  const panel = btn.nextElementSibling;
+  if (panel.classList.contains('open')) {
+    panel.classList.remove('open');
+    btn.innerHTML = '&#43; View Details';
+    return;
+  }
+  panel.classList.add('open');
+  btn.innerHTML = '&#8722; Hide Details';
+  if (panel.dataset.loaded) return;
+  panel.dataset.loaded = '1';
+  panel.innerHTML = '<div class="detail-loading">Loading attribute breakdown…</div>';
+  fetch('/api/detail/' + idA + '/' + idB)
+    .then(r => r.json())
+    .then(d => {
+      if (d.error) {
+        panel.innerHTML = '<div class="detail-loading" style="color:var(--red)">' + escHtml(d.error) + '</div>';
+        return;
+      }
+      let html = '<table class="detail-table"><thead><tr>'
+        + '<th class="attr-col">Attribute</th>'
+        + '<th>' + escHtml(d.product_a.name) + '</th>'
+        + '<th>' + escHtml(d.product_b.name) + '</th>'
+        + '<th>Match</th>'
+        + '</tr></thead><tbody>';
+      d.differences.forEach(row => {
+        const cls = row.match ? 'match' : 'mismatch';
+        const icon = row.match ? '✓' : '≠';
+        html += '<tr>'
+          + '<td class="attr-col">' + escHtml(row.attribute) + '</td>'
+          + '<td>' + escHtml(row.value_a) + '</td>'
+          + '<td>' + escHtml(row.value_b) + '</td>'
+          + '<td class="match-col ' + cls + '">' + icon + '</td>'
+          + '</tr>';
+      });
+      html += '</tbody></table>';
+      panel.innerHTML = html;
+    })
+    .catch(e => {
+      panel.innerHTML = '<div class="detail-loading" style="color:var(--red)">' + escHtml(String(e)) + '</div>';
+    });
+}
+
 function scoreBarRows(c) {
   const rows = [
     ['Taste',       c.taste_score],
@@ -731,6 +1092,7 @@ def api_company(company_id):
         company_name = company_rows[0][1]
 
         # Find raw materials used in this company's finished goods via BOM
+        material_rows = []
         try:
             material_rows = db.execute_query("""
                 SELECT DISTINCT rm.product_id, rm.product_name,
@@ -739,14 +1101,33 @@ def api_company(company_id):
                 JOIN BOM_Component bc ON rm.product_id = bc.ConsumedProductId
                 JOIN BOM b            ON bc.BOMId = b.Id
                 JOIN Product fp       ON b.ProducedProductId = fp.Id
-                WHERE fp.ManufacturerId = ?
+                WHERE fp.CompanyId = ?
             """, (company_id,))
         except Exception:
-            # Fallback: materials where this company is the supplier
-            material_rows = db.execute_query("""
-                SELECT DISTINCT product_id, product_name, supplier_id, supplier_name, product_class
-                FROM raw_material_master WHERE supplier_name = ?
-            """, (company_name,))
+            pass
+
+        # Fallback: materials where this company is listed as supplier
+        if not material_rows:
+            try:
+                material_rows = db.execute_query("""
+                    SELECT DISTINCT product_id, product_name, supplier_id, supplier_name, product_class
+                    FROM raw_material_master WHERE supplier_name = ?
+                """, (company_name,))
+            except Exception:
+                pass
+
+        # Second fallback: find via Supplier table by name match
+        if not material_rows:
+            try:
+                material_rows = db.execute_query("""
+                    SELECT DISTINCT rm.product_id, rm.product_name,
+                                    rm.supplier_id, rm.supplier_name, rm.product_class
+                    FROM raw_material_master rm
+                    JOIN Supplier s ON rm.supplier_id = s.Id
+                    WHERE s.Name = ?
+                """, (company_name,))
+            except Exception:
+                pass
 
         # Group by product_id
         mat_map = {}
@@ -760,23 +1141,17 @@ def api_company(company_id):
         # Finished goods for each material
         for pid, mdata in mat_map.items():
             fg_rows = db.execute_query("""
-                SELECT DISTINCT p.Name FROM Product p
+                SELECT DISTINCT p.SKU FROM Product p
                 JOIN BOM b ON p.Id = b.ProducedProductId
                 JOIN BOM_Component bc ON b.Id = bc.BOMId
                 WHERE bc.ConsumedProductId = ?
             """, (pid,))
             mdata["finished_goods"] = [r[0] for r in fg_rows if r[0]]
 
-        # Consolidation: compare same-class material pairs with different product_ids
-        by_class = defaultdict(list)
-        for mdata in mat_map.values():
-            by_class[mdata["product_class"]].append(mdata)
-
+        # Consolidation: compare all material pairs regardless of class
         consolidation_ops = []
-        for class_mats in by_class.values():
-            if len(class_mats) < 2:
-                continue
-            for mat_a, mat_b in combinations(class_mats, 2):
+        all_mats = list(mat_map.values())
+        for mat_a, mat_b in combinations(all_mats, 2):
                 sup_a = mat_a["suppliers"][0] if mat_a["suppliers"] else None
                 sup_b = mat_b["suppliers"][0] if mat_b["suppliers"] else None
                 if not sup_a or not sup_b:
@@ -809,10 +1184,17 @@ def api_company(company_id):
 
         consolidation_ops.sort(key=lambda x: x["score"], reverse=True)
 
+        portfolio = None
+        try:
+            portfolio = compute_supplier_portfolio(mat_map)
+        except Exception as e:
+            app.logger.error(f"Portfolio computation failed: {e}")
+
         return jsonify({
             "company_name": company_name,
             "materials": list(mat_map.values()),
             "consolidation_opportunities": consolidation_ops,
+            "supplier_portfolio": portfolio,
         })
 
     except Exception as e:
@@ -839,6 +1221,105 @@ def api_compare(product_id_a, product_id_b):
         if not rows_b:
             return jsonify({"error": f"Product {product_id_b} not found"}), 404
         return jsonify(compare_products(product_id_a, rows_a[0][0], product_id_b, rows_b[0][0]))
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/debug/scores')
+def api_debug_scores():
+    """Return score distribution and top pairs across all cached comparisons."""
+    try:
+        rows = db.execute_query(
+            """SELECT rmc.product_id_a, rmc.product_id_b,
+                      rmc.general_comparison_score, rmc.comparison_label,
+                      ma.product_name, mb.product_name,
+                      ma.supplier_name, mb.supplier_name
+               FROM raw_material_comparisons rmc
+               LEFT JOIN raw_material_master ma
+                 ON rmc.product_id_a = ma.product_id AND rmc.supplier_id_a = ma.supplier_id
+               LEFT JOIN raw_material_master mb
+                 ON rmc.product_id_b = mb.product_id AND rmc.supplier_id_b = mb.supplier_id
+               ORDER BY rmc.general_comparison_score DESC"""
+        )
+        total = len(rows)
+        above_95 = sum(1 for r in rows if r[2] >= 0.95)
+        above_80 = sum(1 for r in rows if r[2] >= 0.80)
+        above_60 = sum(1 for r in rows if r[2] >= 0.60)
+        top20 = [
+            {
+                "score": round(r[2], 3),
+                "label": r[3],
+                "product_a": r[4] or f"id={r[0]}",
+                "supplier_a": r[6] or "?",
+                "product_b": r[5] or f"id={r[1]}",
+                "supplier_b": r[7] or "?",
+            }
+            for r in rows[:20]
+        ]
+        return jsonify({
+            "total_comparisons": total,
+            "above_95_pct": above_95,
+            "above_80_pct": above_80,
+            "above_60_pct": above_60,
+            "top_20_pairs": top20,
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/detail/<int:product_id_a>/<int:product_id_b>')
+def api_detail(product_id_a, product_id_b):
+    try:
+        rows_a = db.execute_query(
+            "SELECT supplier_id FROM raw_material_master WHERE product_id = ? LIMIT 1", (product_id_a,))
+        rows_b = db.execute_query(
+            "SELECT supplier_id FROM raw_material_master WHERE product_id = ? LIMIT 1", (product_id_b,))
+        if not rows_a or not rows_b:
+            return jsonify({"error": "One or both products not found"}), 404
+
+        mat_a = db.get_raw_material_master(product_id_a, rows_a[0][0])
+        mat_b = db.get_raw_material_master(product_id_b, rows_b[0][0])
+        if not mat_a or not mat_b:
+            return jsonify({"error": "Product data not found"}), 404
+
+        pj_a = mat_a["product_json"]
+        pj_b = mat_b["product_json"]
+
+        ATTRIBUTES = [
+            ("general_class",          "Category"),
+            ("taste",                  "Taste"),
+            ("physical_form",          "Physical Form"),
+            ("functional_role",        "Functional Role"),
+            ("application_domain",     "Application Domain"),
+            ("ingredient_type",        "Ingredient Type"),
+            ("cleaned_canonical_name", "Canonical Name"),
+            ("confidence",             "AI Confidence"),
+        ]
+
+        differences = []
+        for key, label in ATTRIBUTES:
+            raw_a = pj_a.get(key, None)
+            raw_b = pj_b.get(key, None)
+            if isinstance(raw_a, float):
+                val_a = f"{raw_a:.2f}"
+            else:
+                val_a = str(raw_a) if raw_a is not None else "—"
+            if isinstance(raw_b, float):
+                val_b = f"{raw_b:.2f}"
+            else:
+                val_b = str(raw_b) if raw_b is not None else "—"
+            differences.append({
+                "attribute": label,
+                "value_a": val_a,
+                "value_b": val_b,
+                "match": val_a.lower() == val_b.lower() and val_a != "—"
+            })
+
+        return jsonify({
+            "product_a": {"name": mat_a["product_name"], "supplier": mat_a["supplier_name"]},
+            "product_b": {"name": mat_b["product_name"], "supplier": mat_b["supplier_name"]},
+            "differences": differences,
+        })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

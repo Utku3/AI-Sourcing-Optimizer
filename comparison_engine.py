@@ -102,7 +102,9 @@ def compare_products(product_id_a: int, supplier_id_a: int,
     # Prepare result
     result = {
         "product_id_a": product_id_a,
+        "supplier_id_a": supplier_id_a,
         "product_id_b": product_id_b,
+        "supplier_id_b": supplier_id_b,
         "taste_score": taste_score,
         "feasibility_score": feasibility_score,
         "usage_score": usage_score,
