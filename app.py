@@ -5,10 +5,7 @@ from collections import defaultdict
 from db import db
 from service import suggest_alternatives
 from comparison_engine import compare_products
-from enrich_raw_materials import start_watcher
-
 app = Flask(__name__)
-start_watcher(interval_seconds=60)
 
 
 def compute_supplier_portfolio(mat_map: dict) -> dict:
